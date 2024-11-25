@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- Chat container -->
+<div class="flex h-[calc(100vh-12rem)] bg-white rounded-xl shadow-lg overflow-hidden">
+    <!-- Users sidebar -->
+    <div class="w-1/4 bg-gray-50 border-r border-gray-200">
+        <div class="p-4 border-b border-gray-200">
+            <h2 class="text-xl font-semibold text-gray-800">Chats</h2>
+        </div>
+
+        <div class="overflow-y-auto h-full">
+            {% for user in users %}
+            <div class="p-3 hover:bg-gray-100 cursor-pointer user-item transition-colors duration-200"
+                 user-id="{{ user.id }}"
+                 onclick="selectUser({{ user.id }}, '{{ user.username }}')">
+                <div class="flex items-center space-x-3">
+                    <div class="flex-shrink-0 relative">
+                        <div class="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center">
+                            <span class="text-white font-semibold">{{ user.username[0].upper() }}</span>
+                        </div>
+                        <div class="status-indicator-{{ user.id }} absolute bottom-0 right-0 w-3 h-3 rounded-full bg-gray-300"></div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <span class="font-medium">{{ user.username }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Chat area -->
+    <div class="flex-1 flex flex-col">
+        <!-- Chat header -->
+        <div class="p-4 border-b border-gray-200 bg-white">
+            <div class="flex items-center space-x-2">
+                <h3 id="selected-user" class="text-xl font-semibold text-gray-800">Select a user to start chatting</h3>
+                <span id="user-status" class="hidden px-2 py-1 text-sm rounded-full"></span>
+                <span id="typing-indicator" class="hidden text-sm text-gray-500 italic">typing...</span>
+            </div>
+        </div>
+
+        <!-- Messages container -->
+        <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-4"></div>
+
+        <!-- Message input area -->
+        <div class="p-4 border-t border-gray-200 bg-white">
+            <!-- Reply preview -->
+            <div id="reply-container" class="hidden mb-2 p-2 bg-gray-100 rounded-lg">
+                <div class="flex justify-between items-center">
+                    <div id="reply-preview" class="text-sm text-gray-600"></div>
+                    <button onclick="cancelReply()" class="text-gray-500 hover:text-gray-700">×</button>
+                </div>
+            </div>
+
+            <!-- Message form -->
+            <form id="message-form" class="flex items-center space-x-2" onsubmit="sendMessage(event)">
+                <input type="hidden" id="current-receiver" name="receiver_id" value="">
+                <input type="hidden" id="reply-to-id" name="reply_to_id" value="">
+                <input type="text"
+                       id="message-input"
+                       class="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:border-indigo-500"
+                       placeholder="Type your message..."
+                       onkeyup="handleTyping(event)"
+                       disabled>
+                <button type="submit"
+                        class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
+                    Send
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Socket.IO initialization -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+
+<!-- Chat JavaScript -->
+<script>
+    const socket = io();
+    let selectedUserId = null;
+    let typingTimeout = null;
+    let isTyping = false;
+
+    // Connect to Socket.IO
+    socket.on('connect', () => {
+        console.log('Connected to Socket.IO');
+        startHeartbeat();
+    });
+
+    // Handle connection errors
+    socket.on('connect_error', (error) => {
+        console.error('Connection error:', error);
+    });
+
+    // Heartbeat to maintain active status
+    function startHeartbeat() {
+        setInterval(() => {
+            socket.emit('heartbeat');
+        }, 25000);
+    }
+
+    // User selection
+    function selectUser(userId, username) {
+        selectedUserId = userId;
+        document.getElementById('current-receiver').value = userId;
+        document.getElementById('selected-user').textContent = username;
+        document.getElementById('message-input').disabled = false;
+        document.getElementById('message-form').querySelector('button').disabled = false;
+
+        // Clear previous messages
+        document.getElementById('messages').innerHTML = '';
+
+        // Load messages
+        fetchMessages(userId);
+
+        // Update UI
+        document.querySelectorAll('.user-item').forEach(item => {
+            item.classList.remove('bg-gray-100');
+        });
+        document.querySelector(`[user-id="${userId}"]`).classList.add('bg-gray-100');
+    }
+
+    // Fetch messages
+    async function fetchMessages(userId) {
+        try {
+            const response = await fetch(`/get_messages/${userId}`);
+            const data = await response.json();
+            displayMessages(data.messages);
+        } catch (error) {
+            console.error('Error fetching messages:', error);
+        }
+    }
+
+    // Display messages
+    function displayMessages(messages) {
+        const container = document.getElementById('messages');
+        container.innerHTML = '';
+
+        messages.forEach(message => {
+            const messageElement = createMessageElement(message);
+            container.appendChild(messageElement);
+        });
+
+        scrollToBottom();
+    }
+
+    // Create message element
+    function createMessageElement(message) {
+        const div = document.createElement('div');
+        const isSender = message.sender_id === {{ current_user.id }};
+
+        div.className = `flex ${isSender ? 'justify-end' : 'justify-start'}`;
+
+        const innerContent = `
+            <div class="${isSender ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-800'} rounded-lg px-4 py-2 max-w-[70%]">
+                ${message.reply_to ? `
+                    <div class="text-sm ${isSender ? 'text-indigo-200' : 'text-gray-500'} mb-1 border-l-2 pl-2">
+                        ${message.reply_to.senderName}: ${message.reply_to.content}
+                    </div>
+                ` : ''}
+                <div class="break-words">${message.content}</div>
+                <div class="text-xs ${isSender ? 'text-indigo-200' : 'text-gray-500'} mt-1">
+                    ${message.timestamp}
+                </div>
+            </div>
+        `;
+
+        div.innerHTML = innerContent;
+
+        // Add reply functionality
+        div.onclick = () => {
+            setReplyTo(message);
+        };
+
+        return div;
+    }
+
+    // Send message
+    function sendMessage(event) {
+        event.preventDefault();
+        const input = document.getElementById('message-input');
+        const content = input.value.trim();
+
+        if (!content || !selectedUserId) return;
+
+        socket.emit('send_message', {
+            message: content,
+            receiver_id: selectedUserId,
+            reply_to_id: document.getElementById('reply-to-id').value
+        });
+
+        input.value = '';
+        cancelReply();
+    }
+
+    // Handle new messages
+    socket.on('new_message', (data) => {
+        if (selectedUserId === data.message.sender_id || selectedUserId === data.message.receiver_id) {
+            const container = document.getElementById('messages');
+            const messageElement = createMessageElement(data.message);
+            container.appendChild(messageElement);
+            scrollToBottom();
+        }
+    });
+
+    // Typing indicator
+    function handleTyping(event) {
+        if (!selectedUserId) return;
+
+        if (!isTyping) {
+            isTyping = true;
+            socket.emit('typing', { receiver_id: selectedUserId });
+        }
+
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => {
+            isTyping = false;
+            socket.emit('stop_typing', { receiver_id: selectedUserId });
+        }, 1000);
+    }
+
+    // Handle typing events
+    socket.on('typing', (data) => {
+        if (data.sender_id === selectedUserId) {
+            document.getElementById('typing-indicator').classList.remove('hidden');
+        }
+    });
+
+    socket.on('stop_typing', (data) => {
+        if (data.sender_id === selectedUserId) {
+            document.getElementById('typing-indicator').classList.add('hidden');
+        }
+    });
+
+    // Reply functionality
+    function setReplyTo(message) {
+        const replyContainer = document.getElementById('reply-container');
+        const replyPreview = document.getElementById('reply-preview');
+        const replyToId = document.getElementById('reply-to-id');
+
+        replyContainer.classList.remove('hidden');
+        replyPreview.textContent = `${message.sender_username}: ${message.content}`;
+        replyToId.value = message.id;
+    }
+
+    function cancelReply() {
+        const replyContainer = document.getElementById('reply-container');
+        const replyToId = document.getElementById('reply-to-id');
+
+        replyContainer.classList.add('hidden');
+        replyToId.value = '';
+    }
+
+    // User status handling
+    socket.on('user_status_change', (data) => {
+        const statusIndicator = document.querySelector(`.status-indicator-${data.user_id}`);
+        if (statusIndicator) {
+            statusIndicator.classList.remove('bg-gray-300', 'bg-green-500');
+            statusIndicator.classList.add(data.status === 'online' ? 'bg-green-500' : 'bg-gray-300');
+        }
+
+        if (selectedUserId === data.user_id) {
+            const statusElement = document.getElementById('user-status');
+            statusElement.classList.remove('hidden');
+            statusElement.textContent = data.status;
+            statusElement.classList.remove('bg-gray-200', 'bg-green-200');
+            statusElement.classList.add(data.status === 'online' ? 'bg-green-200' : 'bg-gray-200');
+        }
+    });
+
+    // Error handling
+    socket.on('error', (data) => {
+        console.error('Socket error:', data.msg);
+        // You could add a toast notification here
+    });
+
+    // Utility functions
+    function scrollToBottom() {
+        const container = document.getElementById('messages');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // Force disconnect handling
+    socket.on('force_disconnect', () => {
+        socket.disconnect();
+        window.location.href = '/login';
+    });
+
+    // Initial online status check
+    fetch('/get_online_users')
+        .then(response => response.json())
+        .then(data => {
+            data.online_users.forEach(userId => {
+                const statusIndicator = document.querySelector(`.status-indicator-${userId}`);
+                if (statusIndicator) {
+                    statusIndicator.classList.remove('bg-gray-300');
+                    statusIndicator.classList.add('bg-green-500');
+                }
+            });
+        });
+</script>
+{% endblock %}

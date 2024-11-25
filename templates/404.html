@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center min-h-[60vh]">
+    <h1 class="text-6xl font-bold text-indigo-600 mb-4">404</h1>
+    <p class="text-xl text-gray-600 mb-8">Page not found</p>
+    <a href="{{ url_for('index') }}" 
+       class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">
+        Return Home
+    </a>
+</div>
+{% endblock %}
